@@ -1,8 +1,8 @@
 # Patient Registration App
 
-A modern, feature-rich patient registration application built with React and PGlite. This application provides a complete patient management system with advanced UI/UX, authentication, and comprehensive functionality.
+A modern, feature-rich patient registration application built with Next.js and PGlite. This application provides a complete patient management system with advanced UI/UX, authentication, and comprehensive functionality.
 
-## ✨ Features
+##  Features
 
 ### Core Functionality
 - **Patient Registration** with comprehensive form validation
