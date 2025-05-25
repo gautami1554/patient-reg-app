@@ -18,66 +18,213 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import { Download, Search, Trash2, Users, Filter, Calendar, Mail, Phone, Loader2 } from "lucide-react"
+import {
+  Download,
+  Search,
+  Trash2,
+  Users,
+  Filter,
+  Calendar,
+  Mail,
+  Phone,
+  Loader2,
+  RefreshCw,
+  UserCheck,
+  AlertTriangle,
+  BadgeIcon as IdCard,
+} from "lucide-react"
 import { toast } from "react-toastify"
 
 export default function PatientList() {
   const [patients, setPatients] = useState([])
   const [searchTerm, setSearchTerm] = useState("")
   const [isLoading, setIsLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const [filterGender, setFilterGender] = useState("all")
 
-  const loadPatients = async () => {
+  const loadPatients = async (showRefreshIndicator = false) => {
     try {
+      if (showRefreshIndicator) setIsRefreshing(true)
+
       const data = await getAllPatients()
       setPatients(data)
     } catch (error) {
       console.error("Error loading patients:", error)
-      toast.error("Failed to load patient records.", {
+      toast.error("Failed to load patient records", {
         position: "top-right",
-        autoClose: 5000,
+        autoClose: 3000,
+        hideProgressBar: true,
+        closeOnClick: true,
+        pauseOnHover: false,
+        draggable: false,
+        className: "text-sm",
       })
     } finally {
       setIsLoading(false)
+      if (showRefreshIndicator) setIsRefreshing(false)
     }
   }
 
   useEffect(() => {
     loadPatients()
 
-    // Listen for database updates from other tabs
-    const handleDbUpdate = () => {
-      loadPatients()
+    // Enhanced BroadcastChannel for INSTANT cross-tab sync
+    const channel = new BroadcastChannel("patient_updates")
+
+    const handleMessage = (event) => {
+      console.log("PatientList: Received broadcast message:", event.data)
+
+      try {
+        const { type, data, source, timestamp } = event.data
+
+        // Ignore messages from the same tab if needed
+        if (source === "patient_list") {
+          console.log("Ignoring message from same component type")
+          return
+        }
+
+        if (type === "PATIENT_ADDED" && data?.patientData) {
+          console.log("Processing PATIENT_ADDED message")
+
+          // Add new patient to the list instantly
+          setPatients((prevPatients) => {
+            // Check if patient already exists to avoid duplicates
+            const exists = prevPatients.some(
+              (p) => p.id === data.patientData.id || p.patientId === data.patientData.patientId,
+            )
+
+            if (exists) {
+              console.log("Patient already exists, skipping duplicate")
+              return prevPatients
+            }
+
+            console.log("✅ Adding new patient to list:", data.patientData.firstName, data.patientData.lastName)
+            return [data.patientData, ...prevPatients]
+          })
+
+          // Show toast notification for cross-tab updates
+          if (data.patientName) {
+            toast.info(`${data.patientName} was registered in another tab`, {
+              position: "top-right",
+              autoClose: 2000,
+              hideProgressBar: true,
+              closeOnClick: true,
+              pauseOnHover: false,
+              draggable: false,
+              className: "text-sm",
+            })
+          }
+        } else if (type === "PATIENT_DELETED" && data?.patientId) {
+          console.log("Processing PATIENT_DELETED message")
+
+          // Remove patient from the list instantly
+          setPatients((prevPatients) => {
+            const filtered = prevPatients.filter(
+              (patient) => patient.id !== data.patientId && patient.patientId !== data.patientId,
+            )
+
+            console.log("✅ Patient deleted from list from broadcast", {
+              before: prevPatients.length,
+              after: filtered.length,
+              deletedId: data.patientId,
+            })
+
+            // Show toast notification for cross-tab updates
+            if (data.patientName && filtered.length !== prevPatients.length) {
+              toast.info(`${data.patientName} was deleted in another tab`, {
+                position: "top-right",
+                autoClose: 2000,
+                hideProgressBar: true,
+                closeOnClick: true,
+                pauseOnHover: false,
+                draggable: false,
+                className: "text-sm",
+              })
+            }
+
+            return filtered
+          })
+        } else {
+          console.log("Unknown message type or missing data:", type)
+        }
+      } catch (error) {
+        console.error("Error handling broadcast message:", error)
+      }
     }
 
-    window.addEventListener("db_updated", handleDbUpdate)
-    return () => window.removeEventListener("db_updated", handleDbUpdate)
+    channel.addEventListener("message", handleMessage)
+
+    // Cleanup function
+    return () => {
+      channel.removeEventListener("message", handleMessage)
+      channel.close()
+    }
   }, [])
 
   const handleDeletePatient = async (id, patientName) => {
     try {
       await deletePatient(id)
 
-      toast.success(`${patientName}'s record deleted successfully`, {
+      // Broadcast to other tabs with enhanced data
+      const broadcastChannel = new BroadcastChannel("patient_updates")
+      const message = {
+        type: "PATIENT_DELETED",
+        data: {
+          patientName,
+          patientId: id, // This should be the database ID
+        },
+        timestamp: Date.now(),
+        source: "patient_list",
+      }
+
+      try {
+        broadcastChannel.postMessage(message)
+        console.log("✅ Delete broadcast sent successfully")
+
+        // Add delay before closing
+        setTimeout(() => {
+          broadcastChannel.close()
+        }, 100)
+      } catch (broadcastError) {
+        console.error("❌ Delete broadcast failed:", broadcastError)
+      }
+
+      toast.success(`${patientName} deleted successfully`, {
         position: "top-right",
-        autoClose: 3000,
+        autoClose: 2000,
+        hideProgressBar: true,
+        closeOnClick: true,
+        pauseOnHover: false,
+        draggable: false,
+        className: "text-sm",
       })
 
-      loadPatients()
+      // Remove from current tab instantly
+      setPatients((prevPatients) => prevPatients.filter((patient) => patient.id !== id))
     } catch (error) {
-      console.error("Error deleting patient:", error)
-      toast.error("Failed to delete patient record.", {
+      console.error("❌ Error deleting patient:", error)
+      toast.error("Failed to delete patient", {
         position: "top-right",
-        autoClose: 5000,
+        autoClose: 3000,
+        hideProgressBar: true,
+        closeOnClick: true,
+        pauseOnHover: false,
+        draggable: false,
+        className: "text-sm",
       })
     }
   }
 
   const exportToCSV = () => {
     if (patients.length === 0) {
-      toast.warning("No patient data available to export.", {
+      toast.warning("No patient data to export", {
         position: "top-right",
-        autoClose: 3000,
+        autoClose: 2000,
+        hideProgressBar: true,
+        closeOnClick: true,
+        pauseOnHover: false,
+        draggable: false,
+        className: "text-sm",
       })
       return
     }
@@ -102,9 +249,14 @@ export default function PatientList() {
     link.click()
     document.body.removeChild(link)
 
-    toast.success("Patient data exported successfully! 📊", {
+    toast.success("Data exported successfully", {
       position: "top-right",
-      autoClose: 3000,
+      autoClose: 2000,
+      hideProgressBar: true,
+      closeOnClick: true,
+      pauseOnHover: false,
+      draggable: false,
+      className: "text-sm",
     })
   }
 
@@ -114,7 +266,8 @@ export default function PatientList() {
       patient.firstName.toLowerCase().includes(searchLower) ||
       patient.lastName.toLowerCase().includes(searchLower) ||
       patient.email.toLowerCase().includes(searchLower) ||
-      patient.phone.includes(searchTerm)
+      patient.phone.includes(searchTerm) ||
+      (patient.patientId && patient.patientId.toLowerCase().includes(searchLower))
     const matchesGender = filterGender === "all" || patient.gender === filterGender
     return matchesSearch && matchesGender
   })
@@ -148,25 +301,39 @@ export default function PatientList() {
           <div className="flex items-center space-x-3">
             <div className="p-2 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-lg shadow-lg">
               <Users className="h-6 w-6 text-white" />
+              {isRefreshing && <RefreshCw className="h-3 w-3 animate-spin text-white absolute -mt-1 -ml-1" />}
             </div>
             <div>
-              <CardTitle className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-gray-100">
+              <CardTitle className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
                 Patient Records
+                {isRefreshing && <RefreshCw className="h-4 w-4 animate-spin text-blue-500" />}
               </CardTitle>
               <CardDescription className="text-gray-600 dark:text-gray-300">
                 View and manage all registered patients ({patients.length} total)
               </CardDescription>
             </div>
           </div>
-          <Button
-            variant="outline"
-            onClick={exportToCSV}
-            disabled={patients.length === 0}
-            className="bg-white/80 dark:bg-gray-700/80 backdrop-blur-sm border-0 shadow-lg hover:scale-105 transition-all duration-300"
-          >
-            <Download className="mr-2 h-4 w-4" />
-            Export CSV
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => loadPatients(true)}
+              disabled={isRefreshing}
+              className="bg-white/80 dark:bg-gray-700/80 backdrop-blur-sm border-0 shadow-lg hover:scale-105 transition-all duration-300"
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+            <Button
+              variant="outline"
+              onClick={exportToCSV}
+              disabled={patients.length === 0}
+              className="bg-white/80 dark:bg-gray-700/80 backdrop-blur-sm border-0 shadow-lg hover:scale-105 transition-all duration-300"
+            >
+              <Download className="mr-2 h-4 w-4" />
+              Export CSV
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent>
@@ -175,7 +342,7 @@ export default function PatientList() {
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
             <Input
-              placeholder="Search by name, email, or phone..."
+              placeholder="Search by name, email, phone, or patient ID..."
               className="pl-10 h-11 border-0 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-blue-500 transition-all duration-300"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -226,15 +393,23 @@ export default function PatientList() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-gray-50 dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <TableHead className="font-semibold text-gray-700 dark:text-gray-300">
+                      <div className="flex items-center">
+                        <IdCard className="h-4 w-4 mr-1" />
+                        Patient ID
+                      </div>
+                    </TableHead>
                     <TableHead className="font-semibold text-gray-700 dark:text-gray-300">Patient</TableHead>
                     <TableHead className="font-semibold text-gray-700 dark:text-gray-300">
                       <div className="flex items-center">
                         <Calendar className="h-4 w-4 mr-1" />
-                        Date of Birth
+                        Age / DOB
                       </div>
                     </TableHead>
                     <TableHead className="font-semibold text-gray-700 dark:text-gray-300">Gender</TableHead>
                     <TableHead className="font-semibold text-gray-700 dark:text-gray-300">Contact</TableHead>
+                    <TableHead className="font-semibold text-gray-700 dark:text-gray-300">Emergency Contact</TableHead>
+                    <TableHead className="font-semibold text-gray-700 dark:text-gray-300">Medical Info</TableHead>
                     <TableHead className="text-right font-semibold text-gray-700 dark:text-gray-300">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -246,6 +421,12 @@ export default function PatientList() {
                       style={{ animationDelay: `${index * 50}ms` }}
                     >
                       <TableCell className="font-medium">
+                        <Badge className="bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-300 border-0 font-mono text-xs">
+                          {patient.patientId ||
+                            `PAT-${new Date().getFullYear()}-${String(patient.id).padStart(4, "0")}`}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="font-medium">
                         <div className="flex items-center space-x-3">
                           <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-full flex items-center justify-center text-white font-semibold text-sm">
                             {patient.firstName.charAt(0)}
@@ -255,18 +436,24 @@ export default function PatientList() {
                             <div className="font-semibold text-gray-900 dark:text-gray-100">
                               {patient.firstName} {patient.lastName}
                             </div>
-                            <div className="text-sm text-gray-500 dark:text-gray-400">ID: {patient.id}</div>
                           </div>
                         </div>
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center text-gray-700 dark:text-gray-300">
-                          <Calendar className="h-4 w-4 mr-2 text-gray-400" />
-                          {formatDate(patient.dateOfBirth)}
+                        <div className="space-y-1">
+                          <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300 border-0 text-xs">
+                            {patient.age} years
+                          </Badge>
+                          <div className="flex items-center text-sm text-gray-500 dark:text-gray-400">
+                            <Calendar className="h-3 w-3 mr-1" />
+                            {formatDate(patient.dateOfBirth)}
+                          </div>
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge className={`${getGenderBadgeColor(patient.gender)} border-0 font-medium`}>
+                        <Badge
+                          className={`bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300 border-0 font-medium ${getGenderBadgeColor(patient.gender)}`}
+                        >
                           {patient.gender.charAt(0).toUpperCase() + patient.gender.slice(1)}
                         </Badge>
                       </TableCell>
@@ -274,12 +461,57 @@ export default function PatientList() {
                         <div className="space-y-1">
                           <div className="flex items-center text-sm text-gray-700 dark:text-gray-300">
                             <Mail className="h-3 w-3 mr-2 text-gray-400" />
-                            {patient.email}
+                            <span className="truncate max-w-[150px]" title={patient.email}>
+                              {patient.email}
+                            </span>
                           </div>
                           <div className="flex items-center text-sm text-gray-500 dark:text-gray-400">
                             <Phone className="h-3 w-3 mr-2 text-gray-400" />
                             {patient.phone}
                           </div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {patient.emergencyContactName ? (
+                          <div className="space-y-1">
+                            <div className="flex items-center text-sm text-gray-700 dark:text-gray-300">
+                              <UserCheck className="h-3 w-3 mr-2 text-gray-400" />
+                              <span className="truncate max-w-[100px]" title={patient.emergencyContactName}>
+                                {patient.emergencyContactName}
+                              </span>
+                            </div>
+                            {patient.emergencyContactPhone && (
+                              <div className="flex items-center text-sm text-gray-500 dark:text-gray-400">
+                                <Phone className="h-3 w-3 mr-2 text-gray-400" />
+                                {patient.emergencyContactPhone}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-gray-400 text-sm">Not provided</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <div className="space-y-1">
+                          {patient.allergies && (
+                            <div className="flex items-center text-sm text-orange-600 dark:text-orange-400">
+                              <AlertTriangle className="h-3 w-3 mr-1" />
+                              <span className="truncate max-w-[100px]" title={patient.allergies}>
+                                {patient.allergies}
+                              </span>
+                            </div>
+                          )}
+                          {patient.medicalHistory && (
+                            <div
+                              className="text-sm text-gray-600 dark:text-gray-400 truncate max-w-[100px]"
+                              title={patient.medicalHistory}
+                            >
+                              {patient.medicalHistory}
+                            </div>
+                          )}
+                          {!patient.allergies && !patient.medicalHistory && (
+                            <span className="text-gray-400 text-sm">None</span>
+                          )}
                         </div>
                       </TableCell>
                       <TableCell className="text-right">
@@ -303,7 +535,10 @@ export default function PatientList() {
                                 <strong>
                                   {patient.firstName} {patient.lastName}
                                 </strong>
-                                's record? This action cannot be undone.
+                                's record (
+                                {patient.patientId ||
+                                  `PAT-${new Date().getFullYear()}-${String(patient.id).padStart(4, "0")}`}
+                                )? This action cannot be undone.
                               </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { z } from "zod"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { addPatient } from "@/lib/database"
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
 import { DatePicker } from "@/components/date-picker"
-import { User, Mail, Phone, MapPin, Shield, FileText, Loader2 } from "lucide-react"
+import { User, Mail, Phone, MapPin, Shield, FileText, Loader2, UserCheck, AlertTriangle, Calendar } from "lucide-react"
 import { toast } from "react-toastify"
 
 const patientSchema = z.object({
@@ -26,38 +26,99 @@ const patientSchema = z.object({
     .min(2, { message: "Last name must be at least 2 characters." })
     .max(50, { message: "Last name must be less than 50 characters." })
     .regex(/^[a-zA-Z\s]+$/, { message: "Last name can only contain letters and spaces." }),
-  dateOfBirth: z.date({ required_error: "Date of birth is required." }).refine(
-    (date) => {
-      const today = new Date()
-      const age = today.getFullYear() - date.getFullYear()
-      return age >= 0 && age <= 150
-    },
-    { message: "Please enter a valid date of birth." },
-  ),
+  dateOfBirth: z
+    .date({ required_error: "Date of birth is required." })
+    .refine(
+      (date) => {
+        const today = new Date()
+        today.setHours(23, 59, 59, 999) // Set to end of today
+        return date < today
+      },
+      { message: "Date of birth must be before today." },
+    )
+    .refine(
+      (date) => {
+        const today = new Date()
+        const age = today.getFullYear() - date.getFullYear()
+        const monthDiff = today.getMonth() - date.getMonth()
+        const actualAge = monthDiff < 0 || (monthDiff === 0 && today.getDate() < date.getDate()) ? age - 1 : age
+        return actualAge >= 0 && actualAge <= 150
+      },
+      { message: "Please enter a valid date of birth (age must be between 0-150 years)." },
+    ),
+  age: z
+    .string()
+    .min(1, { message: "Age is required." })
+    .regex(/^\d+$/, { message: "Age must be a number." })
+    .refine(
+      (val) => {
+        const age = Number.parseInt(val)
+        return age >= 0 && age <= 150
+      },
+      { message: "Age must be between 0 and 150." },
+    ),
   gender: z.string().min(1, { message: "Please select a gender." }),
   email: z
     .string()
     .email({ message: "Please enter a valid email address." })
     .max(100, { message: "Email must be less than 100 characters." }),
-  phone: z
+  countryCode: z.string().min(1, { message: "Please select a country code." }),
+  mobileNumber: z
     .string()
-    .min(10, { message: "Phone number must be at least 10 digits." })
-    .max(15, { message: "Phone number must be less than 15 digits." })
-    .regex(/^[\d\s\-+$$$$]+$/, { message: "Please enter a valid phone number." }),
+    .min(10, { message: "Mobile number must be exactly 10 digits." })
+    .max(10, { message: "Mobile number must be exactly 10 digits." })
+    .regex(/^\d{10}$/, { message: "Mobile number must contain exactly 10 digits only." }),
   address: z
     .string()
     .min(5, { message: "Address must be at least 5 characters." })
     .max(200, { message: "Address must be less than 200 characters." }),
+  emergencyContactName: z
+    .string()
+    .max(100, { message: "Emergency contact name must be less than 100 characters." })
+    .optional(),
+  emergencyContactPhone: z
+    .string()
+    .max(20, { message: "Emergency contact phone must be less than 20 characters." })
+    .regex(/^[\d\s\-+()]*$/, { message: "Please enter a valid phone number." })
+    .optional(),
   medicalHistory: z.string().max(1000, { message: "Medical history must be less than 1000 characters." }).optional(),
+  allergies: z.string().max(500, { message: "Allergies must be less than 500 characters." }).optional(),
+  currentMedications: z
+    .string()
+    .max(500, { message: "Current medications must be less than 500 characters." })
+    .optional(),
   insuranceProvider: z
     .string()
     .max(100, { message: "Insurance provider must be less than 100 characters." })
     .optional(),
-  insuranceNumber: z.string().max(50, { message: "Insurance number must be less than 50 characters." }).optional(),
+  insurancePolicyNumber: z
+    .string()
+    .max(50, { message: "Insurance policy number must be less than 50 characters." })
+    .optional(),
 })
+
+// Common country codes
+const countryCodes = [
+  { code: "+1", country: "US/Canada", flag: "🇺🇸" },
+  { code: "+91", country: "India", flag: "🇮🇳" },
+  { code: "+44", country: "UK", flag: "🇬🇧" },
+  { code: "+86", country: "China", flag: "🇨🇳" },
+  { code: "+81", country: "Japan", flag: "🇯🇵" },
+  { code: "+49", country: "Germany", flag: "🇩🇪" },
+  { code: "+33", country: "France", flag: "🇫🇷" },
+  { code: "+39", country: "Italy", flag: "🇮🇹" },
+  { code: "+34", country: "Spain", flag: "🇪🇸" },
+  { code: "+61", country: "Australia", flag: "🇦🇺" },
+  { code: "+55", country: "Brazil", flag: "🇧🇷" },
+  { code: "+7", country: "Russia", flag: "🇷🇺" },
+  { code: "+82", country: "South Korea", flag: "🇰🇷" },
+  { code: "+65", country: "Singapore", flag: "🇸🇬" },
+  { code: "+971", country: "UAE", flag: "🇦🇪" },
+]
 
 export default function PatientRegistration() {
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
 
   const form = useForm({
     resolver: zodResolver(patientSchema),
@@ -65,30 +126,165 @@ export default function PatientRegistration() {
       firstName: "",
       lastName: "",
       email: "",
-      phone: "",
+      age: "",
+      countryCode: "+91", // Default to India
+      mobileNumber: "",
       address: "",
+      emergencyContactName: "",
+      emergencyContactPhone: "",
       medicalHistory: "",
+      allergies: "",
+      currentMedications: "",
       insuranceProvider: "",
-      insuranceNumber: "",
+      insurancePolicyNumber: "",
     },
   })
+
+  // Auto-calculate age when date of birth changes
+  const watchDateOfBirth = form.watch("dateOfBirth")
+  useEffect(() => {
+    if (watchDateOfBirth) {
+      const today = new Date()
+      const birthDate = new Date(watchDateOfBirth)
+      let age = today.getFullYear() - birthDate.getFullYear()
+      const monthDiff = today.getMonth() - birthDate.getMonth()
+
+      if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+        age--
+      }
+
+      if (age >= 0 && age <= 150) {
+        form.setValue("age", age.toString())
+      }
+    }
+  }, [watchDateOfBirth, form])
+
+  // Restore form data from localStorage on component mount
+  useEffect(() => {
+    const savedFormData = localStorage.getItem("patient_form_data")
+    if (savedFormData) {
+      try {
+        const parsedData = JSON.parse(savedFormData)
+        // Restore all form fields
+        Object.keys(parsedData).forEach((key) => {
+          if (key === "dateOfBirth" && parsedData[key]) {
+            form.setValue(key, new Date(parsedData[key]))
+          } else if (parsedData[key]) {
+            form.setValue(key, parsedData[key])
+          }
+        })
+        setHasUnsavedChanges(true)
+      } catch (error) {
+        console.error("Error restoring form data:", error)
+      }
+    }
+  }, [form])
+
+  // Save form data to localStorage on every change
+  useEffect(() => {
+    const subscription = form.watch((value) => {
+      // Only save if there's actual data
+      const hasData = Object.values(value).some((val) => val && val !== "")
+      if (hasData) {
+        localStorage.setItem("patient_form_data", JSON.stringify(value))
+        setHasUnsavedChanges(true)
+      }
+    })
+    return () => subscription.unsubscribe()
+  }, [form])
 
   const onSubmit = async (data) => {
     setIsSubmitting(true)
     try {
-      await addPatient(data)
+      // Combine country code and mobile number for storage
+      const phoneNumber = `${data.countryCode}${data.mobileNumber}`
 
-      toast.success("Patient registered successfully! 🎉", {
+      const patientData = {
+        ...data,
+        phone: phoneNumber, // Store combined phone number
+      }
+
+      const result = await addPatient(patientData)
+      const patientName = `${data.firstName} ${data.lastName}`
+
+      console.log("✅ Patient added successfully:", { patientName, patientId: result.patientId })
+
+      // Create complete patient object for instant updates with proper ID handling
+      const completePatientData = {
+        id: result.id || result.patientId, // Ensure we have the correct database ID
+        patientId: result.patientId,
+        firstName: data.firstName,
+        lastName: data.lastName,
+        email: data.email,
+        phone: phoneNumber,
+        age: Number.parseInt(data.age),
+        gender: data.gender,
+        dateOfBirth: data.dateOfBirth.toISOString(),
+        address: data.address,
+        emergencyContactName: data.emergencyContactName || null,
+        emergencyContactPhone: data.emergencyContactPhone || null,
+        medicalHistory: data.medicalHistory || null,
+        allergies: data.allergies || null,
+        currentMedications: data.currentMedications || null,
+        insuranceProvider: data.insuranceProvider || null,
+        insurancePolicyNumber: data.insurancePolicyNumber || null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }
+
+      console.log("📡 Broadcasting patient addition:", completePatientData)
+
+      // Broadcast complete patient data for INSTANT updates with retry mechanism
+      try {
+        const channel = new BroadcastChannel("patient_updates")
+        const message = {
+          type: "PATIENT_ADDED",
+          data: {
+            patientName,
+            patientId: result.patientId,
+            patientData: completePatientData,
+          },
+          timestamp: Date.now(),
+          source: "registration_form",
+        }
+
+        channel.postMessage(message)
+
+        // Add a small delay to ensure message is sent before closing
+        setTimeout(() => {
+          channel.close()
+        }, 100)
+
+        console.log("✅ Broadcast sent successfully")
+      } catch (broadcastError) {
+        console.error("❌ Broadcast failed:", broadcastError)
+      }
+
+      // Clear saved form data
+      localStorage.removeItem("patient_form_data")
+      setHasUnsavedChanges(false)
+
+      toast.success(`${patientName} registered successfully!`, {
         position: "top-right",
         autoClose: 3000,
+        hideProgressBar: true,
+        closeOnClick: true,
+        pauseOnHover: false,
+        draggable: false,
+        className: "text-sm",
       })
 
       form.reset()
     } catch (error) {
-      console.error("Error registering patient:", error)
-      toast.error("Failed to register patient. Please try again.", {
+      console.error("❌ Error registering patient:", error)
+      toast.error("Registration failed. Please try again.", {
         position: "top-right",
-        autoClose: 5000,
+        autoClose: 3000,
+        hideProgressBar: true,
+        closeOnClick: true,
+        pauseOnHover: false,
+        draggable: false,
+        className: "text-sm",
       })
     } finally {
       setIsSubmitting(false)
@@ -107,7 +303,6 @@ export default function PatientRegistration() {
               Register New Patient
             </CardTitle>
             <CardDescription className="text-gray-600 dark:text-gray-300">
-              Enter patient details to register them in the system.
             </CardDescription>
           </div>
         </div>
@@ -165,6 +360,32 @@ export default function PatientRegistration() {
                     <FormItem className="flex flex-col">
                       <FormLabel className="text-sm font-medium">Date of Birth *</FormLabel>
                       <DatePicker date={field.value} setDate={field.onChange} />
+                      <FormDescription className="text-xs">Age will be calculated automatically</FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="age"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="text-sm font-medium">Age *</FormLabel>
+                      <FormControl>
+                        <div className="relative">
+                          <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                          <Input
+                            placeholder="25"
+                            {...field}
+                            type="number"
+                            min="0"
+                            max="150"
+                            className="pl-10 h-11 border-0 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-blue-500 transition-all duration-300"
+                          />
+                        </div>
+                      </FormControl>
+                      <FormDescription className="text-xs">Auto-filled from date of birth</FormDescription>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -225,26 +446,66 @@ export default function PatientRegistration() {
                   )}
                 />
 
-                <FormField
-                  control={form.control}
-                  name="phone"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel className="text-sm font-medium">Phone Number *</FormLabel>
-                      <FormControl>
-                        <div className="relative">
-                          <Phone className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-                          <Input
-                            placeholder="(123) 456-7890"
-                            {...field}
-                            className="pl-10 h-11 border-0 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-blue-500 transition-all duration-300"
-                          />
-                        </div>
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                <div className="space-y-2">
+                  <FormLabel className="text-sm font-medium">Mobile Number *</FormLabel>
+                  <div className="flex gap-2">
+                    <FormField
+                      control={form.control}
+                      name="countryCode"
+                      render={({ field }) => (
+                        <FormItem className="w-32">
+                          <Select onValueChange={field.onChange} defaultValue={field.value}>
+                            <FormControl>
+                              <SelectTrigger className="h-11 border-0 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-blue-500 transition-all duration-300">
+                                <SelectValue placeholder="Code" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {countryCodes.map((country) => (
+                                <SelectItem key={country.code} value={country.code}>
+                                  <div className="flex items-center space-x-2">
+                                    <span>{country.flag}</span>
+                                    <span>{country.code}</span>
+                                  </div>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="mobileNumber"
+                      render={({ field }) => (
+                        <FormItem className="flex-1">
+                          <FormControl>
+                            <div className="relative">
+                              <Phone className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                              <Input
+                                placeholder=""
+                                {...field}
+                                maxLength={10}
+                                className="pl-10 h-11 border-0 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-blue-500 transition-all duration-300"
+                                onChange={(e) => {
+                                  // Only allow digits
+                                  const value = e.target.value.replace(/\D/g, "")
+                                  field.onChange(value)
+                                }}
+                              />
+                            </div>
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                  <FormDescription className="text-xs">
+                    Enter 10-digit mobile number without country code
+                  </FormDescription>
+                </div>
               </div>
 
               <FormField
@@ -267,6 +528,56 @@ export default function PatientRegistration() {
                   </FormItem>
                 )}
               />
+            </div>
+
+            {/* Emergency Contact Section */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 flex items-center">
+                <UserCheck className="h-5 w-5 mr-2 text-blue-600" />
+                Emergency Contact
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField
+                  control={form.control}
+                  name="emergencyContactName"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="text-sm font-medium">Emergency Contact Name</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder="Jane Doe"
+                          {...field}
+                          className="h-11 border-0 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-blue-500 transition-all duration-300"
+                        />
+                      </FormControl>
+                      <FormDescription className="text-xs">Optional</FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="emergencyContactPhone"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="text-sm font-medium">Emergency Contact Phone</FormLabel>
+                      <FormControl>
+                        <div className="relative">
+                          <Phone className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                          <Input
+                            placeholder="+91 "
+                            {...field}
+                            className="pl-10 h-11 border-0 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-blue-500 transition-all duration-300"
+                          />
+                        </div>
+                      </FormControl>
+                      <FormDescription className="text-xs">Optional (include country code)</FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
             </div>
 
             {/* Insurance Information Section */}
@@ -297,10 +608,10 @@ export default function PatientRegistration() {
 
                 <FormField
                   control={form.control}
-                  name="insuranceNumber"
+                  name="insurancePolicyNumber"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel className="text-sm font-medium">Insurance Number</FormLabel>
+                      <FormLabel className="text-sm font-medium">Insurance Policy Number</FormLabel>
                       <FormControl>
                         <Input
                           placeholder="Policy Number"
@@ -316,51 +627,109 @@ export default function PatientRegistration() {
               </div>
             </div>
 
-            {/* Medical History Section */}
+            {/* Medical Information Section */}
             <div className="space-y-4">
               <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 flex items-center">
                 <FileText className="h-5 w-5 mr-2 text-blue-600" />
                 Medical Information
               </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField
+                  control={form.control}
+                  name="medicalHistory"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="text-sm font-medium">Medical History</FormLabel>
+                      <FormControl>
+                        <Textarea
+                          placeholder="Previous surgeries, chronic conditions, etc."
+                          className="min-h-[100px] border-0 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-blue-500 transition-all duration-300 resize-none"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormDescription className="text-xs">Optional</FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="allergies"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="text-sm font-medium flex items-center">
+                        <AlertTriangle className="h-4 w-4 mr-1 text-orange-500" />
+                        Allergies
+                      </FormLabel>
+                      <FormControl>
+                        <Textarea
+                          placeholder="Food allergies, drug allergies, environmental allergies, etc."
+                          className="min-h-[100px] border-0 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-blue-500 transition-all duration-300 resize-none"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormDescription className="text-xs">Optional</FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
               <FormField
                 control={form.control}
-                name="medicalHistory"
+                name="currentMedications"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="text-sm font-medium">Medical History</FormLabel>
+                    <FormLabel className="text-sm font-medium">Current Medications</FormLabel>
                     <FormControl>
                       <Textarea
-                        placeholder="Any relevant medical history, allergies, or conditions"
-                        className="min-h-[120px] border-0 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-blue-500 transition-all duration-300 resize-none"
+                        placeholder="List current medications, dosages, and frequency"
+                        className="min-h-[80px] border-0 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-blue-500 transition-all duration-300 resize-none"
                         {...field}
                       />
                     </FormControl>
-                    <FormDescription className="text-xs">
-                      Optional - Include allergies, chronic conditions, medications, etc.
-                    </FormDescription>
+                    <FormDescription className="text-xs">Optional</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
               />
             </div>
 
-            <Button
-              type="submit"
-              className="w-full h-12 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-medium shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-300"
-              disabled={isSubmitting}
-            >
-              {isSubmitting ? (
-                <div className="flex items-center space-x-2">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>Registering Patient...</span>
-                </div>
-              ) : (
-                <div className="flex items-center space-x-2">
-                  <User className="h-4 w-4" />
-                  <span>Register Patient</span>
-                </div>
+            <div className="flex gap-4">
+              <Button
+                type="submit"
+                className="flex-1 h-12 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-medium shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-300"
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? (
+                  <div className="flex items-center space-x-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Registering Patient...</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center space-x-2">
+                    <User className="h-4 w-4" />
+                    <span>Register Patient</span>
+                  </div>
+                )}
+              </Button>
+
+              {hasUnsavedChanges && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    form.reset()
+                    localStorage.removeItem("patient_form_data")
+                    setHasUnsavedChanges(false)
+                  }}
+                  className="h-12 px-3 text-xs"
+                >
+                  Clear
+                </Button>
               )}
-            </Button>
+            </div>
           </form>
         </Form>
       </CardContent>

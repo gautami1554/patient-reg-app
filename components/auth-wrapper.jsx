@@ -156,16 +156,8 @@ export default function AuthWrapper({ children }) {
 
   return (
     <div className="relative">
-      {/* Header with Theme Toggle and Logout */}
-      <div className="fixed top-4 right-4 z-50 flex items-center space-x-2">
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={toggleTheme}
-          className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm border-0 shadow-lg hover:scale-110 transition-all duration-300"
-        >
-          {theme === "light" ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
-        </Button>
+      {/* Header with Logout only - Theme toggle removed */}
+      <div className="fixed top-4 right-4 z-50">
         <Button
           variant="outline"
           size="sm"
