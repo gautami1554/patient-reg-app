@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
@@ -35,14 +35,159 @@ import {
 } from "lucide-react"
 import { toast } from "react-toastify"
 
+// Global broadcast channel manager to prevent multiple instances
+let globalChannel = null
+const channelListeners = new Set()
+
+function getBroadcastChannel() {
+  if (!("BroadcastChannel" in window)) {
+    console.warn("⚠️ BroadcastChannel not supported")
+    return null
+  }
+
+  if (!globalChannel || globalChannel.readyState === "closed") {
+    try {
+      globalChannel = new BroadcastChannel("patient_updates")
+      console.log("🔄 Created new global broadcast channel")
+    } catch (error) {
+      console.error("Failed to create broadcast channel:", error)
+      return null
+    }
+  }
+
+  return globalChannel
+}
+
+function addChannelListener(listener) {
+  const channel = getBroadcastChannel()
+  if (channel && !channelListeners.has(listener)) {
+    channel.addEventListener("message", listener)
+    channelListeners.add(listener)
+    console.log("✅ Added broadcast listener")
+  }
+}
+
+function removeChannelListener(listener) {
+  const channel = getBroadcastChannel()
+  if (channel && channelListeners.has(listener)) {
+    channel.removeEventListener("message", listener)
+    channelListeners.delete(listener)
+    console.log("🧹 Removed broadcast listener")
+  }
+}
+
+function sendBroadcastMessage(message) {
+  const channel = getBroadcastChannel()
+  if (channel) {
+    try {
+      channel.postMessage(message)
+      console.log("📤 Broadcast message sent:", message.type)
+      return true
+    } catch (error) {
+      console.error("Failed to send broadcast message:", error)
+      return false
+    }
+  }
+  return false
+}
+
 export default function PatientList() {
   const [patients, setPatients] = useState([])
   const [searchTerm, setSearchTerm] = useState("")
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [filterGender, setFilterGender] = useState("all")
+  const [deletingIds, setDeletingIds] = useState(new Set())
 
-  const loadPatients = async (showRefreshIndicator = false) => {
+  // Memoized message handler to prevent recreating on every render
+  const handleBroadcastMessage = useCallback((event) => {
+    console.log("📨 PATIENT LIST RECEIVED:", event.data)
+
+    if (event.data.type === "ADD_PATIENT" && event.data.patient) {
+      console.log("➕ ADDING PATIENT TO LIST")
+
+      setPatients((prevPatients) => {
+        // Check if patient already exists
+        const exists = prevPatients.some((p) => p.id === event.data.patient.id || p.email === event.data.patient.email)
+        if (exists) {
+          console.log("⚠️ Patient already exists, skipping")
+          return prevPatients
+        }
+
+        console.log("✅ PATIENT ADDED TO LIST:", event.data.patient.firstName, event.data.patient.lastName)
+
+        // Schedule notification for next tick to avoid render-during-render
+        setTimeout(() => {
+          toast.info(`${event.data.patient.firstName} ${event.data.patient.lastName} was registered in another tab`, {
+            position: "top-right",
+            autoClose: 2000,
+            hideProgressBar: true,
+            closeOnClick: true,
+            pauseOnHover: false,
+            draggable: false,
+            className: "text-sm",
+          })
+        }, 0)
+
+        // Add to beginning of array
+        return [event.data.patient, ...prevPatients]
+      })
+    }
+
+    if (event.data.type === "DELETE_PATIENT" && event.data.patientId) {
+      console.log("➖ REMOVING PATIENT FROM LIST")
+
+      setPatients((prevPatients) => {
+        const filtered = prevPatients.filter((p) => p.id !== event.data.patientId)
+
+        if (filtered.length !== prevPatients.length) {
+          console.log("✅ PATIENT REMOVED FROM LIST")
+
+          // Schedule notification for next tick to avoid render-during-render
+          if (event.data.patientName) {
+            setTimeout(() => {
+              toast.info(`${event.data.patientName} was deleted in another tab`, {
+                position: "top-right",
+                autoClose: 2000,
+                hideProgressBar: true,
+                closeOnClick: true,
+                pauseOnHover: false,
+                draggable: false,
+                className: "text-sm",
+              })
+            }, 0)
+          }
+        }
+
+        return filtered
+      })
+    }
+  }, [])
+
+  // Set up broadcast listener
+  useEffect(() => {
+    console.log("🔄 Setting up patient list broadcast listener...")
+
+    addChannelListener(handleBroadcastMessage)
+
+    // Send ready signal after a short delay
+    setTimeout(() => {
+      sendBroadcastMessage({
+        type: "TAB_READY",
+        source: "patient-list",
+        timestamp: Date.now(),
+      })
+    }, 100)
+
+    // Cleanup function
+    return () => {
+      console.log("🧹 Cleaning up patient list broadcast listener")
+      removeChannelListener(handleBroadcastMessage)
+    }
+  }, [handleBroadcastMessage])
+
+  // Load patients data
+  const loadPatients = useCallback(async (showRefreshIndicator = false) => {
     try {
       if (showRefreshIndicator) setIsRefreshing(true)
 
@@ -63,132 +208,49 @@ export default function PatientList() {
       setIsLoading(false)
       if (showRefreshIndicator) setIsRefreshing(false)
     }
-  }
-
-  useEffect(() => {
-    loadPatients()
-
-    // Enhanced BroadcastChannel for INSTANT cross-tab sync
-    const channel = new BroadcastChannel("patient_updates")
-
-    const handleMessage = (event) => {
-      console.log("PatientList: Received broadcast message:", event.data)
-
-      try {
-        const { type, data, source, timestamp } = event.data
-
-        // Ignore messages from the same tab if needed
-        if (source === "patient_list") {
-          console.log("Ignoring message from same component type")
-          return
-        }
-
-        if (type === "PATIENT_ADDED" && data?.patientData) {
-          console.log("Processing PATIENT_ADDED message")
-
-          // Add new patient to the list instantly
-          setPatients((prevPatients) => {
-            // Check if patient already exists to avoid duplicates
-            const exists = prevPatients.some(
-              (p) => p.id === data.patientData.id || p.patientId === data.patientData.patientId,
-            )
-
-            if (exists) {
-              console.log("Patient already exists, skipping duplicate")
-              return prevPatients
-            }
-
-            console.log("✅ Adding new patient to list:", data.patientData.firstName, data.patientData.lastName)
-            return [data.patientData, ...prevPatients]
-          })
-
-          // Show toast notification for cross-tab updates
-          if (data.patientName) {
-            toast.info(`${data.patientName} was registered in another tab`, {
-              position: "top-right",
-              autoClose: 2000,
-              hideProgressBar: true,
-              closeOnClick: true,
-              pauseOnHover: false,
-              draggable: false,
-              className: "text-sm",
-            })
-          }
-        } else if (type === "PATIENT_DELETED" && data?.patientId) {
-          console.log("Processing PATIENT_DELETED message")
-
-          // Remove patient from the list instantly
-          setPatients((prevPatients) => {
-            const filtered = prevPatients.filter(
-              (patient) => patient.id !== data.patientId && patient.patientId !== data.patientId,
-            )
-
-            console.log("✅ Patient deleted from list from broadcast", {
-              before: prevPatients.length,
-              after: filtered.length,
-              deletedId: data.patientId,
-            })
-
-            // Show toast notification for cross-tab updates
-            if (data.patientName && filtered.length !== prevPatients.length) {
-              toast.info(`${data.patientName} was deleted in another tab`, {
-                position: "top-right",
-                autoClose: 2000,
-                hideProgressBar: true,
-                closeOnClick: true,
-                pauseOnHover: false,
-                draggable: false,
-                className: "text-sm",
-              })
-            }
-
-            return filtered
-          })
-        } else {
-          console.log("Unknown message type or missing data:", type)
-        }
-      } catch (error) {
-        console.error("Error handling broadcast message:", error)
-      }
-    }
-
-    channel.addEventListener("message", handleMessage)
-
-    // Cleanup function
-    return () => {
-      channel.removeEventListener("message", handleMessage)
-      channel.close()
-    }
   }, [])
 
+  // Load patients on mount
+  useEffect(() => {
+    loadPatients()
+  }, [loadPatients])
+
   const handleDeletePatient = async (id, patientName) => {
+    // Prevent multiple deletion attempts
+    if (deletingIds.has(id)) {
+      console.log("⚠️ Already deleting patient:", id)
+      return
+    }
+
     try {
+      console.log("🗑️ Starting deletion for patient:", id, patientName)
+
+      // Mark as being deleted
+      setDeletingIds((prev) => new Set(prev).add(id))
+
+      // Remove from current tab UI IMMEDIATELY (optimistic update)
+      setPatients((prev) => prev.filter((patient) => patient.id !== id))
+
+      // Delete from database
       await deletePatient(id)
+      console.log("✅ Patient deleted from database:", id)
 
-      // Broadcast to other tabs with enhanced data
-      const broadcastChannel = new BroadcastChannel("patient_updates")
+      // Send broadcast message with retry mechanism
       const message = {
-        type: "PATIENT_DELETED",
-        data: {
-          patientName,
-          patientId: id, // This should be the database ID
-        },
+        type: "DELETE_PATIENT",
+        patientId: id,
+        patientName: patientName,
         timestamp: Date.now(),
-        source: "patient_list",
       }
 
-      try {
-        broadcastChannel.postMessage(message)
-        console.log("✅ Delete broadcast sent successfully")
+      // Send immediately
+      sendBroadcastMessage(message)
 
-        // Add delay before closing
-        setTimeout(() => {
-          broadcastChannel.close()
-        }, 100)
-      } catch (broadcastError) {
-        console.error("❌ Delete broadcast failed:", broadcastError)
-      }
+      // Retry after delays to ensure delivery
+      setTimeout(() => sendBroadcastMessage(message), 100)
+      setTimeout(() => sendBroadcastMessage(message), 300)
 
+      // Show success message
       toast.success(`${patientName} deleted successfully`, {
         position: "top-right",
         autoClose: 2000,
@@ -198,11 +260,12 @@ export default function PatientList() {
         draggable: false,
         className: "text-sm",
       })
-
-      // Remove from current tab instantly
-      setPatients((prevPatients) => prevPatients.filter((patient) => patient.id !== id))
     } catch (error) {
       console.error("❌ Error deleting patient:", error)
+
+      // Revert the optimistic update on error
+      loadPatients()
+
       toast.error("Failed to delete patient", {
         position: "top-right",
         autoClose: 3000,
@@ -211,6 +274,13 @@ export default function PatientList() {
         pauseOnHover: false,
         draggable: false,
         className: "text-sm",
+      })
+    } finally {
+      // Remove from deleting set
+      setDeletingIds((prev) => {
+        const newSet = new Set(prev)
+        newSet.delete(id)
+        return newSet
       })
     }
   }
@@ -417,7 +487,9 @@ export default function PatientList() {
                   {filteredPatients.map((patient, index) => (
                     <TableRow
                       key={patient.id}
-                      className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors duration-200 animate-fadeIn"
+                      className={`hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors duration-200 animate-fadeIn ${
+                        deletingIds.has(patient.id) ? "opacity-50 pointer-events-none" : ""
+                      }`}
                       style={{ animationDelay: `${index * 50}ms` }}
                     >
                       <TableCell className="font-medium">
@@ -520,9 +592,14 @@ export default function PatientList() {
                             <Button
                               variant="ghost"
                               size="icon"
-                              className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-200"
+                              disabled={deletingIds.has(patient.id)}
+                              className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                              <Trash2 className="h-4 w-4" />
+                              {deletingIds.has(patient.id) ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
                             </Button>
                           </AlertDialogTrigger>
                           <AlertDialogContent className="bg-white dark:bg-gray-800 border-0 shadow-2xl">

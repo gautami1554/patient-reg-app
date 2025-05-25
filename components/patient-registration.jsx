@@ -116,6 +116,43 @@ const countryCodes = [
   { code: "+971", country: "UAE", flag: "🇦🇪" },
 ]
 
+// Global broadcast channel manager (same as in patient-list)
+let globalChannel = null
+
+function getBroadcastChannel() {
+  if (!("BroadcastChannel" in window)) {
+    console.warn("⚠️ BroadcastChannel not supported")
+    return null
+  }
+
+  if (!globalChannel || globalChannel.readyState === "closed") {
+    try {
+      globalChannel = new BroadcastChannel("patient_updates")
+      console.log("🔄 Created new global broadcast channel")
+    } catch (error) {
+      console.error("Failed to create broadcast channel:", error)
+      return null
+    }
+  }
+
+  return globalChannel
+}
+
+function sendBroadcastMessage(message) {
+  const channel = getBroadcastChannel()
+  if (channel) {
+    try {
+      channel.postMessage(message)
+      console.log("📤 Broadcast message sent:", message.type)
+      return true
+    } catch (error) {
+      console.error("Failed to send broadcast message:", error)
+      return false
+    }
+  }
+  return false
+}
+
 export default function PatientRegistration() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
@@ -139,6 +176,23 @@ export default function PatientRegistration() {
       insurancePolicyNumber: "",
     },
   })
+
+  // Initialize broadcast channel on mount
+  useEffect(() => {
+    console.log("🔄 Setting up patient registration broadcast...")
+
+    // Initialize the global channel
+    getBroadcastChannel()
+
+    // Send ready signal after a short delay
+    setTimeout(() => {
+      sendBroadcastMessage({
+        type: "TAB_READY",
+        source: "patient-registration",
+        timestamp: Date.now(),
+      })
+    }, 100)
+  }, [])
 
   // Auto-calculate age when date of birth changes
   const watchDateOfBirth = form.watch("dateOfBirth")
@@ -201,17 +255,17 @@ export default function PatientRegistration() {
 
       const patientData = {
         ...data,
-        phone: phoneNumber, // Store combined phone number
+        phone: phoneNumber,
       }
 
       const result = await addPatient(patientData)
       const patientName = `${data.firstName} ${data.lastName}`
 
-      console.log("✅ Patient added successfully:", { patientName, patientId: result.patientId })
+      console.log("✅ Patient added to database:", { patientName, result })
 
-      // Create complete patient object for instant updates with proper ID handling
+      // Create complete patient object
       const completePatientData = {
-        id: result.id || result.patientId, // Ensure we have the correct database ID
+        id: result.id,
         patientId: result.patientId,
         firstName: data.firstName,
         lastName: data.lastName,
@@ -232,60 +286,58 @@ export default function PatientRegistration() {
         updatedAt: new Date().toISOString(),
       }
 
-      console.log("📡 Broadcasting patient addition:", completePatientData)
-
-      // Broadcast complete patient data for INSTANT updates with retry mechanism
-      try {
-        const channel = new BroadcastChannel("patient_updates")
-        const message = {
-          type: "PATIENT_ADDED",
-          data: {
-            patientName,
-            patientId: result.patientId,
-            patientData: completePatientData,
-          },
-          timestamp: Date.now(),
-          source: "registration_form",
-        }
-
-        channel.postMessage(message)
-
-        // Add a small delay to ensure message is sent before closing
-        setTimeout(() => {
-          channel.close()
-        }, 100)
-
-        console.log("✅ Broadcast sent successfully")
-      } catch (broadcastError) {
-        console.error("❌ Broadcast failed:", broadcastError)
+      // Send broadcast message with retry mechanism
+      const message = {
+        type: "ADD_PATIENT",
+        patient: completePatientData,
+        timestamp: Date.now(),
       }
+
+      console.log("📤 SENDING BROADCAST:", message)
+
+      // Send immediately
+      sendBroadcastMessage(message)
+
+      // Retry after delays to ensure delivery
+      setTimeout(() => sendBroadcastMessage(message), 100)
+      setTimeout(() => sendBroadcastMessage(message), 300)
+      setTimeout(() => sendBroadcastMessage(message), 500)
+
+      console.log("✅ BROADCAST SENT SUCCESSFULLY")
 
       // Clear saved form data
       localStorage.removeItem("patient_form_data")
       setHasUnsavedChanges(false)
 
-      toast.success(`${patientName} registered successfully!`, {
-        position: "top-right",
-        autoClose: 3000,
-        hideProgressBar: true,
-        closeOnClick: true,
-        pauseOnHover: false,
-        draggable: false,
-        className: "text-sm",
-      })
+      // Show success message after a small delay to avoid render conflicts
+      setTimeout(() => {
+        toast.success(`${patientName} registered successfully!`, {
+          position: "top-right",
+          autoClose: 3000,
+          hideProgressBar: true,
+          closeOnClick: true,
+          pauseOnHover: false,
+          draggable: false,
+          className: "text-sm",
+        })
+      }, 0)
 
       form.reset()
     } catch (error) {
       console.error("❌ Error registering patient:", error)
-      toast.error("Registration failed. Please try again.", {
-        position: "top-right",
-        autoClose: 3000,
-        hideProgressBar: true,
-        closeOnClick: true,
-        pauseOnHover: false,
-        draggable: false,
-        className: "text-sm",
-      })
+
+      // Show error message after a small delay to avoid render conflicts
+      setTimeout(() => {
+        toast.error("Registration failed. Please try again.", {
+          position: "top-right",
+          autoClose: 3000,
+          hideProgressBar: true,
+          closeOnClick: true,
+          pauseOnHover: false,
+          draggable: false,
+          className: "text-sm",
+        })
+      }, 0)
     } finally {
       setIsSubmitting(false)
     }
@@ -376,7 +428,7 @@ export default function PatientRegistration() {
                         <div className="relative">
                           <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                           <Input
-                            placeholder="25"
+                            placeholder=""
                             {...field}
                             type="number"
                             min="0"
@@ -485,7 +537,6 @@ export default function PatientRegistration() {
                             <div className="relative">
                               <Phone className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                               <Input
-                                placeholder=""
                                 {...field}
                                 maxLength={10}
                                 className="pl-10 h-11 border-0 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-blue-500 transition-all duration-300"
@@ -566,7 +617,7 @@ export default function PatientRegistration() {
                         <div className="relative">
                           <Phone className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                           <Input
-                            placeholder="+91 "
+                            placeholder="+91"
                             {...field}
                             className="pl-10 h-11 border-0 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-blue-500 transition-all duration-300"
                           />
