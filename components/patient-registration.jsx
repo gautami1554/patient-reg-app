@@ -180,6 +180,7 @@ export default function PatientRegistration() {
   // Initialize broadcast channel on mount
   useEffect(() => {
     console.log("🔄 Setting up patient registration broadcast...")
+    // const result = addPatient({'firstName': 'test', 'lastName': 'test', 'email': 'test@test.com', 'age': 25, 'gender': 'male', 'dateOfBirth': '2000-01-01', 'address': '123 Main St', 'phone': '+919876543210'})
 
     // Initialize the global channel
     getBroadcastChannel()
