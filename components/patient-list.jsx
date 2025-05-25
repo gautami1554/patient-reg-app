@@ -246,10 +246,6 @@ export default function PatientList() {
       // Send immediately
       sendBroadcastMessage(message)
 
-      // Retry after delays to ensure delivery
-      setTimeout(() => sendBroadcastMessage(message), 100)
-      setTimeout(() => sendBroadcastMessage(message), 300)
-
       // Show success message
       toast.success(`${patientName} deleted successfully`, {
         position: "top-right",
